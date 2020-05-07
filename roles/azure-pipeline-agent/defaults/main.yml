@@ -1,0 +1,15 @@
+az_devops_accountname: agent-automation
+az_devops_accesstoken: 6sv7cpaisong636mcbkodlcxob3lqjyfryjes37whzb2eoech6tq
+az_devops_project_name: agent-ansible
+az_devops_agent_version: 2.165.1
+az_devops_agent_user: veeraiahchennupati999
+az_devops_agent_name: "{{ ansible_hostname }}"
+az_devops_server_url: "https://dev.azure.com/{{ az_devops_accountname }}"
+az_devops_agent_folder: "/home/{{ az_devops_agent_user }}/agent/"
+az_devops_work_folder: "/home/{{ az_devops_agent_user }}/agent/_work"
+az_devops_agent_pool_name: "Default"
+az_devops_agent_role: "build"
+az_devops_deployment_group_tags: null
+az_devops_deployment_group_name: "Default"
+az_devops_agent_replace_existing: false
+az_devops_reconfigure_agent: false

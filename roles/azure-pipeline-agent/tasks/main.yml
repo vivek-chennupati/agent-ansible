@@ -1,0 +1,149 @@
+- name: Add an agent user
+  user:
+    name: "{{ az_devops_agent_user }}"
+    comment: "Azure DevOps Agent"
+    shell: /bin/bash
+
+- name: Create directories
+  file:
+    state: directory
+    path: "{{ item }}"
+    owner: "{{ az_devops_agent_user }}"
+    group: "{{ az_devops_agent_user }}"
+    mode: 0755
+  loop:
+    - "{{ az_devops_agent_folder }}"
+    - "{{ az_devops_work_folder }}"
+
+- name: Download and unarchive
+  unarchive:
+    src: "https://vstsagentpackage.azureedge.net/agent/2.165.1/vsts-agent-linux-x64-2.165.1.tar.gz"
+    dest: "{{ az_devops_agent_folder }}"
+    remote_src: yes
+    owner: "{{ az_devops_agent_user }}"
+    group: "{{ az_devops_agent_user }}"
+    creates: "{{ az_devops_agent_folder }}/config.sh"
+
+- name: Install dependencies via shipped script
+  command: ./bin/installdependencies.sh
+  become: true
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+  retries: 2
+  register: dep_install
+  until: dep_install is succeeded
+  changed_when:
+    - dep_install.stdout is regex("[1-9]\d* upgraded|[1-9]\d* newly installed")
+
+      #- name: Upgrade all packages to the latest version
+      #apt:
+      #name: "*"
+      #state: latest
+
+- name: Remove dependencies that are no longer required
+  apt:
+    autoremove: yes
+
+- name: Register agent service status
+  shell: |
+    if [ ! -f "/etc/systemd/system/$(systemd-escape vsts.agent.{{ az_devops_accountname }}.{{ az_devops_agent_pool_name }}.{{ az_devops_agent_name }}.service)" ]; then
+      true
+    else
+      false
+    fi
+  become: true
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+  changed_when: false
+  failed_when: service_not_installed.rc not in [0,1]
+  register: service_not_installed
+  check_mode: no
+
+- name: Set agent config facts
+  set_fact:
+    agent_cmd_args:
+      - "./config.sh"
+      - "--unattended"
+      - "--acceptteeeula"
+      - "--url '{{ az_devops_server_url }}'"
+      - "--work _work"
+      - "--auth PAT"
+      - "--token '{{ az_devops_accesstoken }}'"
+      - "--runasservice"
+    build_agent_cmd_args:
+      - "--pool"
+      - "--agent '{{ az_devops_agent_name }}'"
+    deployment_agent_cmd_args:
+      - "--deploymentgroup"
+      - "--deploymentgroupname '{{ az_devops_deployment_group_name }}'"
+      - "--addDeploymentGroupTags"
+      - "--deploymentGroupTags '{{ az_devops_deployment_group_tags }}'"
+      - "--projectname '{{ az_devops_project_name }}'"
+    service_is_installed: "{{ service_not_installed.rc == 1 }}"
+    reconfigure_or_replace: "{{ az_devops_reconfigure_agent or az_devops_agent_replace_existing }}"
+
+- name: Uninstall agent service
+  command: ./svc.sh uninstall
+  become: true
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+    removes: "{{ az_devops_agent_folder }}/runsvc.sh"
+  when:
+    - service_is_installed
+    - reconfigure_or_replace
+
+- name: Unconfigure agent
+  command: "./config.sh remove --auth PAT --token {{ az_devops_accesstoken }}"
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+    removes: "{{ az_devops_agent_folder }}/.agent"
+  become: true
+  become_user: "{{ az_devops_agent_user }}"
+  when:
+    - service_is_installed
+    - reconfigure_or_replace
+
+- name: Add '--replace' configuration argument
+  set_fact:
+    build_agent_cmd_args: "{{ build_agent_cmd_args }} + ['--replace']"
+    deployment_agent_cmd_args: "{{ build_agent_cmd_args }} + ['--replace']"
+  when:
+    - az_devops_agent_replace_existing
+
+- name: Configure agent as build server
+  command: "{{ (agent_cmd_args + build_agent_cmd_args) | join(' ') }}"
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+    creates: "{{ az_devops_agent_folder }}/.agent"
+  become: true
+  become_user: "{{ az_devops_agent_user }}"
+  when:
+    - az_devops_agent_role == 'build'
+    - (not service_is_installed) or reconfigure_or_replace
+
+- name: Configure agent as deployment server
+  command: "{{ (agent_cmd_args + deployment_agent_cmd_args) | join(' ') }}"
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+    creates: "{{ az_devops_agent_folder }}/.agent"
+  become: true
+  become_user: "{{ az_devops_agent_user }}"
+  when:
+    - az_devops_agent_role == 'deployment'
+    - (not service_is_installed) or reconfigure_or_replace
+
+- name: Install agent service
+  command: ./svc.sh install {{ az_devops_agent_user }}
+  become: true
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+  when:
+    - (not service_is_installed) or reconfigure_or_replace
+
+- name: Start agent service
+  command: ./svc.sh start
+  become: true
+  args:
+    chdir: "{{ az_devops_agent_folder }}"
+  when:
+    - (not service_is_installed) or reconfigure_or_replace
